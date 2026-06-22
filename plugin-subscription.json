@@ -1,0 +1,80 @@
+[
+  {
+    "id": "plugin-single-node-relay",
+    "name": "指定节点中转",
+    "version": "v1.0.3",
+    "group": "Extensions",
+    "description": "为指定 sing-box 出站节点配置中转节点，启动前写入 detour，订阅或配置更新不会覆盖插件保存的中转关系。",
+    "tags": ["实用工具", "功能扩展", "提升体验"],
+    "type": "Http",
+    "url": "https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plugin-single-node-relay.js",
+    "path": "data/plugins/plugin-single-node-relay.js",
+    "triggers": ["on::manual", "on::ready", "on::before::core::start"],
+    "hasUI": true,
+    "menus": {},
+    "context": {
+      "profiles": {},
+      "subscriptions": {},
+      "rulesets": {},
+      "plugins": {},
+      "scheduledtasks": {}
+    },
+    "status": 0,
+    "configuration": [],
+    "disabled": false,
+    "install": false,
+    "installed": false
+  },
+  {
+    "id": "plugin-outbound-dns-resolver",
+    "name": "出站 DNS 解析器",
+    "version": "v1.0.0",
+    "group": "Extensions",
+    "description": "按多条规则为 sing-box 出站写入 domain_resolver，让不同出站使用不同 DNS 服务解析服务器地址。",
+    "tags": ["实用工具", "功能扩展", "DNS"],
+    "type": "Http",
+    "url": "https://raw.githubusercontent.com/SenreySong/singbox-outbound-dns-plugin/main/plugin-outbound-dns-resolver.js",
+    "path": "data/plugins/plugin-outbound-dns-resolver.js",
+    "triggers": ["on::manual", "on::ready", "on::before::core::start"],
+    "hasUI": true,
+    "menus": {},
+    "context": {
+      "profiles": {},
+      "subscriptions": {},
+      "rulesets": {},
+      "plugins": {},
+      "scheduledtasks": {}
+    },
+    "status": 0,
+    "configuration": [],
+    "disabled": false,
+    "install": false,
+    "installed": false
+  },
+  {
+    "id": "plugin-policy-group-manager",
+    "name": "策略组自动整理",
+    "version": "v1.0.0",
+    "group": "Extensions",
+    "description": "按节点名称自动生成国家策略组，并插入未隐藏策略组，启动前清理不存在的国家组引用。",
+    "tags": ["实用工具", "功能扩展", "策略组"],
+    "type": "Http",
+    "url": "https://raw.githubusercontent.com/SenreySong/singbox-policy-group-plugin/main/plugin-policy-group-manager.js",
+    "path": "data/plugins/plugin-policy-group-manager.js",
+    "triggers": ["on::manual", "on::ready", "on::before::core::start"],
+    "hasUI": true,
+    "menus": {},
+    "context": {
+      "profiles": {},
+      "subscriptions": {},
+      "rulesets": {},
+      "plugins": {},
+      "scheduledtasks": {}
+    },
+    "status": 0,
+    "configuration": [],
+    "disabled": false,
+    "install": false,
+    "installed": false
+  }
+]
