@@ -236,7 +236,7 @@ const openManager = async (profile) => {
         const savedRules = otherRules.concat(hiddenProfileRules, normalized.filter((rule) => rule.relayTag))
         getState().rules.value = normalizeRules(savedRules)
         await saveRules(getState().rules.value)
-        Plugins.message.success('节点中转配置已保存，重启核心后生效')
+        await restartCoreIfCurrentProfile(profile)
         modal.close()
       }
 
@@ -390,6 +390,25 @@ const applyDetours = (config, linkResult) => {
       outbound.detour = relayTag
     }
   }
+}
+
+const restartCoreIfCurrentProfile = async (profile) => {
+  const kernelApiStore = Plugins.useKernelApiStore()
+  if (!kernelApiStore.running) {
+    Plugins.message.success('节点中转配置已保存，启动核心后生效')
+    return
+  }
+
+  const appSettingsStore = Plugins.useAppSettingsStore()
+  const currentProfileId = appSettingsStore.app.kernel.profile
+  if (currentProfileId !== profile.id) {
+    Plugins.message.success('节点中转配置已保存，当前运行的不是此配置，未重启核心')
+    return
+  }
+
+  Plugins.message.info('节点中转配置已保存，正在重启核心...')
+  await kernelApiStore.restartCore()
+  Plugins.message.success('核心已重启，节点中转配置已生效')
 }
 
 const renderChain = (sourceTag, links) => {
