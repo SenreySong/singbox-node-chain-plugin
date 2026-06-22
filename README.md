@@ -1,0 +1,54 @@
+# singbox-node-chain-plugin
+
+GUI.for.Cores / GUI.for.SingBox 插件：为指定 sing-box 出站节点配置中转节点。
+
+## 功能
+
+- 为单个出站节点设置中转节点。
+- 启动核心前写入 sing-box `detour` 字段。
+- 插件配置独立保存，不修改订阅和 GUI 配置。
+- 订阅或配置更新后，中转关系仍保留。
+- 如果中转节点不存在，会自动清空对应中转并写回插件配置。
+- 禁止循环链路，例如 `A -> B -> A`、`A -> B -> C -> A`。
+
+## 文件
+
+- `plugin-single-node-relay.js`：插件源码。
+- `plugin-single-node-relay.metadata.json`：GUI.for.Cores 插件元数据模板。
+
+## 安装
+
+1. 将 `plugin-single-node-relay.js` 放到 GUI.for.Cores 的 `data/plugins/` 目录。
+2. 添加插件时参考 `plugin-single-node-relay.metadata.json`。
+3. 启用插件触发器：
+   - `on::manual`
+   - `on::ready`
+   - `on::before::core::start`
+
+## 配置持久化
+
+插件配置保存到：
+
+```text
+data/third/single-node-relay/rules.json
+```
+
+该文件只记录节点与中转节点的映射，不写入订阅文件，也不修改 GUI profile。核心启动前插件会根据当前生成配置把映射转换成 sing-box 出站的 `detour` 字段。
+
+## 适用范围
+
+插件只展示并处理适合设置 `detour` 的普通出站节点，排除：
+
+- `selector`
+- `urltest`
+- `direct`
+- `block`
+- `dns`
+
+## 校验
+
+已做静态检查：
+
+```bash
+node --check plugin-single-node-relay.js
+```
