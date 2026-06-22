@@ -127,7 +127,6 @@ const openManager = async (profile) => {
       }))
   })
 
-  const relayOptions = computed(() => [{ label: '无中转', value: '' }].concat(nodeOptions.value))
   const filteredRules = computed(() => {
     const text = keyword.value.trim().toLowerCase()
     if (!text) return rules.value
@@ -141,7 +140,12 @@ const openManager = async (profile) => {
     template: `
     <div class="flex flex-col gap-8 pr-8">
       <div class="grid items-center gap-8" style="grid-template-columns: minmax(0, 1fr) 220px auto;">
-        <div class="font-bold text-16">{{ profileName }} 节点中转</div>
+        <div class="flex items-center gap-8 min-w-0">
+          <div class="font-bold text-16 truncate" :title="profileName + ' 节点中转'">{{ profileName }} 节点中转</div>
+          <div class="text-12 shrink-0" style="padding: 2px 6px; border: 1px solid #94a3b8; border-radius: 4px; background: #f8fafc; color: #334155;">
+            {{ pluginVersion }}
+          </div>
+        </div>
         <Input v-model="keyword" placeholder="搜索节点" allow-paste />
         <Button type="primary" @click="save">保存配置</Button>
       </div>
@@ -163,7 +167,9 @@ const openManager = async (profile) => {
             </div>
             <div class="min-w-0">
               <div class="text-12 text-gray-500">中转节点</div>
-              <Select v-model="rule.relayTag" :options="relayOptions" />
+              <button type="button" :style="relayButtonStyle" :title="renderRelayLabel(rule)" @click="openRelayPicker(rule)">
+                {{ renderRelayLabel(rule) }}
+              </button>
               <div class="text-12 truncate" style="color: #92400e;" :title="getRuleWarning(rule)">
                 {{ getRuleWarning(rule) }}
               </div>
@@ -187,6 +193,10 @@ const openManager = async (profile) => {
     </div>
     `,
     setup() {
+      const relayButtonStyle =
+        'width: 100%; min-height: 30px; padding: 0 10px; border: 1px solid #94a3b8; border-radius: 4px; background: #ffffff; color: #0f172a; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
+      const optionButtonStyle =
+        'width: 100%; min-height: 30px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #0f172a; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
       watch(
         rules,
         (items) => {
@@ -207,6 +217,11 @@ const openManager = async (profile) => {
         return context.outboundByTag.get(tag)?.type || '不存在'
       }
 
+      const renderRelayLabel = (rule) => {
+        if (!rule.relayTag) return '无中转'
+        return `${rule.relayTag} (${getOutboundType(rule.relayTag)})`
+      }
+
       const getRuleWarning = (rule) => {
         if (!rule.enabled) return ''
         if (!rule.relayTag) return ''
@@ -214,6 +229,72 @@ const openManager = async (profile) => {
         const draftLinks = buildValidatedLinks(rules.value, context, { throwOnCycle: false })
         if (draftLinks.invalidCycles.has(rule.sourceTag)) return '当前链路存在循环'
         return renderChain(rule.sourceTag, draftLinks.links)
+      }
+
+      const openRelayPicker = (rule) => {
+        const pickerKeyword = ref('')
+        const pickerOptions = computed(() => {
+          const text = pickerKeyword.value.trim().toLowerCase()
+          if (!text) return nodeOptions.value
+          return nodeOptions.value.filter((option) => {
+            const content = `${option.label} ${option.value}`.toLowerCase()
+            return content.includes(text)
+          })
+        })
+
+        const pickerComponent = {
+          template: `
+          <div class="flex flex-col gap-8 p-8">
+            <Input v-model="pickerKeyword" placeholder="搜索节点 tag 或类型" allow-paste />
+            <button type="button" :style="optionButtonStyle" @click="chooseRelay('')">无中转</button>
+            <div class="flex flex-col gap-6" style="max-height: 360px; overflow: auto;">
+              <button
+                v-for="option in pickerOptions"
+                :key="option.value"
+                type="button"
+                :style="optionButtonStyle"
+                :title="option.label"
+                @click="chooseRelay(option.value)"
+              >
+                {{ option.label }}
+              </button>
+              <div v-if="pickerOptions.length === 0" class="flex items-center justify-center min-h-[96px] border border-dashed rounded-4">
+                <div class="text-12 text-gray-500">没有匹配节点</div>
+              </div>
+            </div>
+          </div>
+          `,
+          setup() {
+            const chooseRelay = (relayTag) => {
+              rule.relayTag = relayTag
+              pickerModal.close()
+            }
+
+            return {
+              pickerKeyword,
+              pickerOptions,
+              optionButtonStyle,
+              chooseRelay
+            }
+          }
+        }
+
+        const pickerModal = Plugins.modal(
+          {
+            title: `选择「${rule.sourceTag}」的中转节点`,
+            width: '620px',
+            height: '520px',
+            footer: false,
+            maskClosable: true,
+            afterClose() {
+              pickerModal.destroy()
+            }
+          },
+          {
+            default: () => h(pickerComponent)
+          }
+        )
+        pickerModal.open()
       }
 
       const clearRelays = async () => {
@@ -241,13 +322,16 @@ const openManager = async (profile) => {
       }
 
       return {
+        pluginVersion: Plugin.version || '',
         profileName: profile.name,
         keyword,
         rules,
         filteredRules,
-        relayOptions,
+        relayButtonStyle,
         getOutboundType,
+        renderRelayLabel,
         getRuleWarning,
+        openRelayPicker,
         clearRelays,
         save
       }
