@@ -2,6 +2,147 @@ const DATA_DIR = 'data/third/single-node-relay'
 const CONFIG_FILE = DATA_DIR + '/rules.json'
 const GROUP_OUTBOUND_TYPES = new Set(['selector', 'urltest'])
 const EXCLUDED_OUTBOUND_TYPES = new Set(['direct', 'block', 'dns'])
+const REGION_ORDER = [
+  'CN',
+  'HK',
+  'MO',
+  'TW',
+  'SG',
+  'JP',
+  'KR',
+  'US',
+  'CA',
+  'GB',
+  'DE',
+  'FR',
+  'NL',
+  'TR',
+  'AU',
+  'NZ',
+  'IN',
+  'TH',
+  'VN',
+  'MY',
+  'PH',
+  'ID',
+  'RU',
+  'BR'
+]
+const REGION_LABELS = {
+  CN: '中国大陆',
+  HK: '香港',
+  MO: '澳门',
+  TW: '台湾',
+  SG: '新加坡',
+  JP: '日本',
+  KR: '韩国',
+  US: '美国',
+  CA: '加拿大',
+  GB: '英国',
+  DE: '德国',
+  FR: '法国',
+  NL: '荷兰',
+  TR: '土耳其',
+  AU: '澳大利亚',
+  NZ: '新西兰',
+  IN: '印度',
+  TH: '泰国',
+  VN: '越南',
+  MY: '马来西亚',
+  PH: '菲律宾',
+  ID: '印度尼西亚',
+  RU: '俄罗斯',
+  BR: '巴西',
+  OTHER: '其他'
+}
+const REGION_ALIASES = {
+  CHINA: 'CN',
+  HK: 'HK',
+  HONGKONG: 'HK',
+  HONG: 'HK',
+  MO: 'MO',
+  MACAU: 'MO',
+  MACAO: 'MO',
+  TW: 'TW',
+  TAIWAN: 'TW',
+  SG: 'SG',
+  SGP: 'SG',
+  SINGAPORE: 'SG',
+  JP: 'JP',
+  JPN: 'JP',
+  JAPAN: 'JP',
+  KR: 'KR',
+  KOR: 'KR',
+  KOREA: 'KR',
+  US: 'US',
+  USA: 'US',
+  AMERICA: 'US',
+  CA: 'CA',
+  CANADA: 'CA',
+  UK: 'GB',
+  GB: 'GB',
+  BRITAIN: 'GB',
+  DE: 'DE',
+  GER: 'DE',
+  GERMANY: 'DE',
+  FR: 'FR',
+  FRA: 'FR',
+  FRANCE: 'FR',
+  NL: 'NL',
+  NLD: 'NL',
+  NETHERLANDS: 'NL',
+  TR: 'TR',
+  TURKEY: 'TR',
+  AU: 'AU',
+  AUS: 'AU',
+  AUSTRALIA: 'AU',
+  NZ: 'NZ',
+  IN: 'IN',
+  INDIA: 'IN',
+  TH: 'TH',
+  THAILAND: 'TH',
+  VN: 'VN',
+  VIETNAM: 'VN',
+  MY: 'MY',
+  MALAYSIA: 'MY',
+  PH: 'PH',
+  PHILIPPINES: 'PH',
+  ID: 'ID',
+  INDONESIA: 'ID',
+  RU: 'RU',
+  RUSSIA: 'RU',
+  BR: 'BR',
+  BRAZIL: 'BR'
+}
+const REGION_KEYWORDS = [
+  ['中国大陆', 'CN'],
+  ['中国', 'CN'],
+  ['大陆', 'CN'],
+  ['香港', 'HK'],
+  ['澳门', 'MO'],
+  ['台湾', 'TW'],
+  ['新加坡', 'SG'],
+  ['日本', 'JP'],
+  ['韩国', 'KR'],
+  ['美国', 'US'],
+  ['加拿大', 'CA'],
+  ['英国', 'GB'],
+  ['德国', 'DE'],
+  ['法国', 'FR'],
+  ['荷兰', 'NL'],
+  ['土耳其', 'TR'],
+  ['澳大利亚', 'AU'],
+  ['澳洲', 'AU'],
+  ['新西兰', 'NZ'],
+  ['印度尼西亚', 'ID'],
+  ['印度', 'IN'],
+  ['泰国', 'TH'],
+  ['越南', 'VN'],
+  ['马来西亚', 'MY'],
+  ['菲律宾', 'PH'],
+  ['俄罗斯', 'RU'],
+  ['巴西', 'BR']
+]
 
 window[Plugin.id] = window[Plugin.id] || {
   rules: Vue.ref([]),
@@ -120,9 +261,10 @@ const openManager = async (profile) => {
 
   const nodeOptions = computed(() => {
     return Array.from(context.outboundByTag.values())
-      .sort((a, b) => a.tag.localeCompare(b.tag, 'zh-CN'))
+      .sort(compareOutboundByRegion)
       .map((outbound) => ({
         label: `${outbound.tag} (${outbound.type})`,
+        type: outbound.type,
         value: outbound.tag
       }))
   })
@@ -151,34 +293,36 @@ const openManager = async (profile) => {
       </div>
 
       <Card>
-        <div class="flex flex-col gap-8" style="max-height: 520px; overflow: auto;">
+        <div class="grid gap-8" style="grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); max-height: 520px; overflow: auto;">
           <div
             v-for="rule in filteredRules"
             :key="rule.id"
-            class="grid items-center gap-8 rounded-4 p-8"
-            style="grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) 86px; border: 1px solid #cbd5e1; background: #f8fafc;"
+            class="flex flex-col gap-8 rounded-4 p-8"
+            :style="getRuleCardStyle(rule)"
           >
-            <div class="min-w-0">
-              <div class="text-12 text-gray-500">节点</div>
-              <div class="font-bold text-13 truncate" :title="rule.sourceTag">{{ rule.sourceTag }}</div>
-              <div class="text-12 truncate" style="color: #64748b;" :title="getOutboundType(rule.sourceTag)">
-                {{ getOutboundType(rule.sourceTag) }}
+            <div class="flex items-start justify-between gap-8">
+              <div class="min-w-0">
+                <div class="flex items-center gap-4">
+                  <span class="text-12" style="color: #64748b;">{{ getRegionLabel(rule.sourceTag) }}</span>
+                  <span class="text-12" style="color: #94a3b8;">{{ getOutboundType(rule.sourceTag) }}</span>
+                </div>
+                <div class="font-bold text-13 leading-5" style="word-break: break-word;" :title="rule.sourceTag">{{ rule.sourceTag }}</div>
               </div>
+              <Switch v-model="rule.enabled">启用</Switch>
             </div>
-            <div class="min-w-0">
-              <div class="text-12 text-gray-500">中转节点</div>
+
+            <div class="rounded-4 p-6" style="background: #ffffff; border: 1px solid #e2e8f0;">
+              <div class="text-12" style="color: #64748b;">中转节点</div>
               <button type="button" :style="relayButtonStyle" :title="renderRelayLabel(rule)" @click="openRelayPicker(rule)">
                 {{ renderRelayLabel(rule) }}
               </button>
-              <div class="text-12 truncate" style="color: #92400e;" :title="getRuleWarning(rule)">
-                {{ getRuleWarning(rule) }}
-              </div>
             </div>
-            <div class="flex justify-end">
-              <Switch v-model="rule.enabled">启用</Switch>
+
+            <div class="min-h-[18px] text-12 truncate" :style="getRuleStatusStyle(rule)" :title="getRuleStatus(rule)">
+              {{ getRuleStatus(rule) }}
             </div>
           </div>
-          <div v-if="filteredRules.length === 0" class="flex items-center justify-center min-h-[120px] border border-dashed rounded-4">
+          <div v-if="filteredRules.length === 0" class="flex items-center justify-center min-h-[120px] border border-dashed rounded-4" style="grid-column: 1 / -1;">
             <div class="text-12 text-gray-500">没有匹配节点</div>
           </div>
         </div>
@@ -194,9 +338,12 @@ const openManager = async (profile) => {
     `,
     setup() {
       const relayButtonStyle =
-        'width: 100%; min-height: 30px; padding: 0 10px; border: 1px solid #94a3b8; border-radius: 4px; background: #ffffff; color: #0f172a; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
+        'width: 100%; min-height: 32px; margin-top: 4px; padding: 0 8px; border: 1px solid #94a3b8; border-radius: 4px; background: #ffffff; color: #0f172a; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
       const optionButtonStyle =
-        'width: 100%; min-height: 30px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #0f172a; cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
+        'width: 100%; min-height: 96px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; color: #0f172a; cursor: pointer; text-align: left; overflow: hidden;'
+      const clearOptionButtonStyle =
+        'width: 100%; min-height: 54px; padding: 10px; border: 1px solid #f59e0b; border-radius: 6px; background: #fffbeb; color: #92400e; cursor: pointer; text-align: left; overflow: hidden;'
+      const draftLinks = computed(() => buildValidatedLinks(rules.value, context, { throwOnCycle: false }))
       watch(
         rules,
         (items) => {
@@ -217,6 +364,8 @@ const openManager = async (profile) => {
         return context.outboundByTag.get(tag)?.type || '不存在'
       }
 
+      const getRegionLabel = (tag) => getRegionInfo(tag).label
+
       const renderRelayLabel = (rule) => {
         if (!rule.relayTag) return '无中转'
         return `${rule.relayTag} (${getOutboundType(rule.relayTag)})`
@@ -226,9 +375,36 @@ const openManager = async (profile) => {
         if (!rule.enabled) return ''
         if (!rule.relayTag) return ''
         if (rule.sourceTag === rule.relayTag) return '不能选择自身作为中转'
-        const draftLinks = buildValidatedLinks(rules.value, context, { throwOnCycle: false })
-        if (draftLinks.invalidCycles.has(rule.sourceTag)) return '当前链路存在循环'
-        return renderChain(rule.sourceTag, draftLinks.links)
+        if (draftLinks.value.invalidCycles.has(rule.sourceTag)) return '当前链路存在循环'
+        return renderChain(rule.sourceTag, draftLinks.value.links)
+      }
+
+      const getRuleStatus = (rule) => {
+        if (!rule.enabled) return '已停用'
+        if (!rule.relayTag) return '未设置中转'
+        return getRuleWarning(rule)
+      }
+
+      const getRuleStatusStyle = (rule) => {
+        if (!rule.enabled) return 'color: #64748b;'
+        if (!rule.relayTag) return 'color: #64748b;'
+        if (getRuleWarning(rule).includes('循环') || getRuleWarning(rule).includes('不能')) return 'color: #dc2626;'
+        return 'color: #166534;'
+      }
+
+      const getRuleCardStyle = (rule) => {
+        if (!rule.enabled) return 'border: 1px solid #cbd5e1; background: #f8fafc; opacity: 0.72;'
+        if (getRuleWarning(rule).includes('循环') || getRuleWarning(rule).includes('不能')) {
+          return 'border: 1px solid #fca5a5; background: #fff7f7;'
+        }
+        if (rule.relayTag) return 'border: 1px solid #86efac; background: #f7fff9;'
+        return 'border: 1px solid #cbd5e1; background: #f8fafc;'
+      }
+
+      const getOptionTitle = (option) => option.value
+
+      const getOptionMeta = (option) => {
+        return `${getRegionInfo(option.value).label} / ${option.type}`
       }
 
       const openRelayPicker = (rule) => {
@@ -237,7 +413,7 @@ const openManager = async (profile) => {
           const text = pickerKeyword.value.trim().toLowerCase()
           if (!text) return nodeOptions.value
           return nodeOptions.value.filter((option) => {
-            const content = `${option.label} ${option.value}`.toLowerCase()
+            const content = `${option.label} ${option.value} ${option.type} ${getRegionInfo(option.value).label}`.toLowerCase()
             return content.includes(text)
           })
         })
@@ -245,9 +421,12 @@ const openManager = async (profile) => {
         const pickerComponent = {
           template: `
           <div class="flex flex-col gap-8 p-8">
-            <Input v-model="pickerKeyword" placeholder="搜索节点 tag 或类型" allow-paste />
-            <button type="button" :style="optionButtonStyle" @click="chooseRelay('')">无中转</button>
-            <div class="flex flex-col gap-6" style="max-height: 360px; overflow: auto;">
+            <Input v-model="pickerKeyword" placeholder="搜索节点、类型或地区" allow-paste />
+            <button type="button" :style="clearOptionButtonStyle" @click="chooseRelay('')">
+              <div class="font-bold text-13">无中转</div>
+              <div class="text-12" style="color: #92400e;">清空当前节点的中转设置</div>
+            </button>
+            <div class="grid gap-8" style="grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); max-height: 360px; overflow: auto;">
               <button
                 v-for="option in pickerOptions"
                 :key="option.value"
@@ -256,9 +435,13 @@ const openManager = async (profile) => {
                 :title="option.label"
                 @click="chooseRelay(option.value)"
               >
-                {{ option.label }}
+                <div class="flex items-center justify-between gap-6">
+                  <span class="text-12" style="color: #64748b;">{{ getOptionMeta(option) }}</span>
+                  <span v-if="option.value === rule.relayTag" class="text-12" style="color: #166534;">已选</span>
+                </div>
+                <div class="font-bold text-13 leading-5" style="word-break: break-word;">{{ getOptionTitle(option) }}</div>
               </button>
-              <div v-if="pickerOptions.length === 0" class="flex items-center justify-center min-h-[96px] border border-dashed rounded-4">
+              <div v-if="pickerOptions.length === 0" class="flex items-center justify-center min-h-[96px] border border-dashed rounded-4" style="grid-column: 1 / -1;">
                 <div class="text-12 text-gray-500">没有匹配节点</div>
               </div>
             </div>
@@ -274,6 +457,10 @@ const openManager = async (profile) => {
               pickerKeyword,
               pickerOptions,
               optionButtonStyle,
+              clearOptionButtonStyle,
+              rule,
+              getOptionTitle,
+              getOptionMeta,
               chooseRelay
             }
           }
@@ -329,8 +516,12 @@ const openManager = async (profile) => {
         filteredRules,
         relayButtonStyle,
         getOutboundType,
+        getRegionLabel,
         renderRelayLabel,
         getRuleWarning,
+        getRuleStatus,
+        getRuleStatusStyle,
+        getRuleCardStyle,
         openRelayPicker,
         clearRelays,
         save
@@ -359,7 +550,7 @@ const openManager = async (profile) => {
 const ensureRows = (storedRules, context, profileId) => {
   const ruleBySource = new Map(storedRules.map((rule) => [rule.sourceTag, rule]))
   return Array.from(context.outboundByTag.keys())
-    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    .sort(compareTagByRegion)
     .map((sourceTag) => {
       const saved = ruleBySource.get(sourceTag)
       return {
@@ -371,6 +562,60 @@ const ensureRows = (storedRules, context, profileId) => {
       }
     })
 }
+
+const compareOutboundByRegion = (a, b) => compareTagByRegion(a.tag, b.tag)
+
+const compareTagByRegion = (a, b) => {
+  const left = getRegionInfo(a)
+  const right = getRegionInfo(b)
+  if (left.order !== right.order) return left.order - right.order
+  return String(a).localeCompare(String(b), 'zh-CN', { numeric: true, sensitivity: 'base' })
+}
+
+const getRegionInfo = (tag) => {
+  const code = detectRegionCode(tag)
+  const order = code === 'OTHER' ? REGION_ORDER.length : REGION_ORDER.indexOf(code)
+  return {
+    code,
+    label: REGION_LABELS[code] || REGION_LABELS.OTHER,
+    order: order < 0 ? REGION_ORDER.length : order
+  }
+}
+
+const detectRegionCode = (tag) => {
+  const text = String(tag || '')
+  const emojiRegion = detectEmojiRegionCode(text)
+  if (emojiRegion) return emojiRegion
+
+  const upperText = text.toUpperCase()
+  for (const [keyword, code] of REGION_KEYWORDS) {
+    if (text.includes(keyword)) return code
+  }
+
+  const tokens = upperText
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+  for (const token of tokens) {
+    if (REGION_ALIASES[token]) return REGION_ALIASES[token]
+  }
+
+  return 'OTHER'
+}
+
+const detectEmojiRegionCode = (text) => {
+  const chars = Array.from(String(text || ''))
+  for (let index = 0; index < chars.length - 1; index += 1) {
+    const first = chars[index].codePointAt(0)
+    const second = chars[index + 1].codePointAt(0)
+    if (!isRegionalIndicator(first) || !isRegionalIndicator(second)) continue
+    const code = String.fromCharCode(first - 0x1f1e6 + 65) + String.fromCharCode(second - 0x1f1e6 + 65)
+    if (REGION_LABELS[code]) return code
+  }
+  return ''
+}
+
+const isRegionalIndicator = (codePoint) => codePoint >= 0x1f1e6 && codePoint <= 0x1f1ff
 
 const buildConfigContext = (config) => {
   const outboundByTag = new Map()
