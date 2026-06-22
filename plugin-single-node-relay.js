@@ -237,17 +237,11 @@ const onBeforeCoreStart = async (config, profile) => {
 
 const selectProfile = async () => {
   const profilesStore = Plugins.useProfilesStore()
+  const appSettingsStore = Plugins.useAppSettingsStore()
   const profiles = profilesStore.profiles || []
   if (profiles.length === 0) throw '请先创建一个配置'
-  if (profiles.length === 1) return profiles[0]
-  return Plugins.picker.single(
-    '请选择配置',
-    profiles.map((profile) => ({
-      label: profile.name,
-      value: profile
-    })),
-    [profilesStore.currentProfile || profiles[0]]
-  )
+  const currentProfileId = appSettingsStore.app?.kernel?.profile
+  return profiles.find((profile) => profile.id === currentProfileId) || profilesStore.currentProfile || profiles[0]
 }
 
 const openManager = async (profile) => {
