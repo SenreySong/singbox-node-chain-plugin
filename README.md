@@ -50,20 +50,27 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 
 强制类转换：
 
-- 旧 DNS 服务器格式转换为 1.14 新格式。
+- 旧 DNS 服务器格式转换为 1.14 新格式，包含 `address_resolver` / `address_strategy`、`fakeip` 范围、`dhcp://`、`h3://`、server 级 `strategy` / `client_subnet` 迁移。
 - `dns.rules[].outbound` DNS 规则迁移为出站 `domain_resolver`。
 - TUN 入站的 `inet4/inet6_route_address` 与排除地址字段合并为 `route_address` / `route_exclude_address`。
+- `rcode://` DNS 服务器会在预览中提示，需要按具体域名规则手动迁移为 `predefined` action。
 
 推荐类转换：
 
 - 删除 `dns.independent_cache`。
 - `experimental.cache_file.store_rdrc` 改为 `store_dns`。
 - direct 出站 `override_address` / `override_port` 改为 `route-options` 规则。
-- 复杂 outbound DNS 规则、DNS 响应匹配和旧入站字段只提示，不默认自动改复杂语义。
+- 出站 `domain_strategy` 迁移到 `domain_resolver.strategy`。
+- 旧 `type=dns` 出站和对应路由规则迁移为 `hijack-dns`。
+- DNS 地址筛选规则迁移为 `evaluate + match_response`。
+- 修正 `ip_version` / `query_type` 与旧 DNS 规则字段混用导致的 1.14 启动失败。
+- 旧入站字段只提示，不默认自动改复杂语义。
 
 功能注入：
 
 - 默认域名解析器注入：当存在域名类出站且缺少 `domain_resolver` / `route.default_domain_resolver` 时，从 `dns.final` 或唯一 DNS 服务器 tag 注入 `route.default_domain_resolver`。
+- TUN DNS 模式注入：当存在 TUN 入站时注入 `dns_mode: hijack`，并补充显式 `hijack-dns` 路由规则。
+- 可选注入 `dns.optimistic` 和 `dns.timeout`，默认关闭，避免改变现有 DNS 缓存和超时策略。
 - 功能注入项在插件面板里单独展示，并可独立开关。
 
 ## 配置持久化

@@ -15,11 +15,17 @@ const DEFAULT_SETTINGS = {
     dnsCache: true,
     cacheFileStoreDns: true,
     directOverride: true,
-    dnsResponseMatch: false,
+    dnsResponseMatch: true,
+    outboundDomainStrategy: true,
+    legacyDnsOutbound: true,
+    dnsRuleCompatibility: true,
     inboundLegacyFields: false
   },
   featureToggles: {
-    routeDefaultDomainResolver: true
+    routeDefaultDomainResolver: true,
+    dnsOptimistic: false,
+    dnsTimeout: false,
+    tunDnsMode: true
   }
 }
 const CONVERSION_DEFINITIONS = [
@@ -28,6 +34,12 @@ const CONVERSION_DEFINITIONS = [
     level: 'force',
     title: '旧 DNS 服务器格式转换',
     description: '把 dns.servers 中只有 address 的旧格式转换为 1.14 新格式。'
+  },
+  {
+    id: 'legacy-rcode-dns-server',
+    level: 'force',
+    title: '旧 RCode DNS 服务器提示',
+    description: 'rcode:// 服务器需要按域名规则迁移为 predefined action，插件只提示不自动改。'
   },
   {
     id: 'outbound-dns-rule',
@@ -62,8 +74,26 @@ const CONVERSION_DEFINITIONS = [
   {
     id: 'dns-response-match',
     level: 'recommend',
-    title: 'DNS 响应匹配迁移提示',
-    description: '旧 DNS 地址筛选字段需要按语义迁移为 evaluate + match_response，插件只提示不自动改。'
+    title: 'DNS 响应匹配迁移',
+    description: '把旧 DNS 地址筛选规则迁移为 evaluate + match_response。'
+  },
+  {
+    id: 'outbound-domain-strategy',
+    level: 'recommend',
+    title: '出站 domain_strategy 迁移',
+    description: '把出站 domain_strategy 迁移到 domain_resolver.strategy。'
+  },
+  {
+    id: 'legacy-dns-outbound',
+    level: 'recommend',
+    title: '旧 DNS 出站迁移',
+    description: '把 type=dns 出站和对应 route 规则迁移为 hijack-dns。'
+  },
+  {
+    id: 'dns-rule-compatibility',
+    level: 'recommend',
+    title: 'DNS 规则兼容性修正',
+    description: '修正 1.14 中 ip_version/query_type 与旧地址筛选字段混用导致的启动失败。'
   },
   {
     id: 'inbound-legacy-fields',
@@ -77,6 +107,21 @@ const FEATURE_DEFINITIONS = [
     id: 'route-default-domain-resolver',
     title: '注入默认域名解析器',
     description: '当存在域名类出站且 route.default_domain_resolver 缺失时，按 1.14 新 DNS 处理注入默认解析器。'
+  },
+  {
+    id: 'dns-optimistic',
+    title: '注入 optimistic DNS 缓存',
+    description: '按 1.14 新功能启用乐观 DNS 缓存；与 disable_cache / disable_expire 冲突时跳过。'
+  },
+  {
+    id: 'dns-timeout',
+    title: '注入 DNS 默认超时',
+    description: '缺少 dns.timeout 时注入默认 DNS 查询超时。'
+  },
+  {
+    id: 'tun-dns-mode',
+    title: '注入 TUN DNS 模式',
+    description: '有 TUN 入站时注入 dns_mode=hijack，并补充显式 hijack-dns 路由规则。'
   }
 ]
 
@@ -207,7 +252,26 @@ const applyMigrations = (config, settings, options = {}) => {
   } else {
     recordSkipped(report, 'direct-override')
   }
-  detectDnsResponseMatchNeeds(workingConfig, report, settings)
+  if (settings.recommendationToggles.outboundDomainStrategy) {
+    migrateOutboundDomainStrategy(workingConfig, report)
+  } else {
+    recordSkipped(report, 'outbound-domain-strategy')
+  }
+  if (settings.recommendationToggles.legacyDnsOutbound) {
+    migrateLegacyDnsOutbound(workingConfig, report)
+  } else {
+    recordSkipped(report, 'legacy-dns-outbound')
+  }
+  if (settings.recommendationToggles.dnsResponseMatch) {
+    migrateDnsResponseMatching(workingConfig, report)
+  } else {
+    recordSkipped(report, 'dns-response-match')
+  }
+  if (settings.recommendationToggles.dnsRuleCompatibility) {
+    fixDnsRuleCompatibility(workingConfig, report)
+  } else {
+    recordSkipped(report, 'dns-rule-compatibility')
+  }
   detectInboundLegacyFields(workingConfig, report, settings)
   applyFeatureInjections(workingConfig, report, settings)
 
@@ -220,18 +284,88 @@ const migrateLegacyDnsServers = (config, report) => {
   let count = 0
   for (const server of config.dns.servers) {
     if (!server || typeof server !== 'object') continue
+    count += migrateLegacyDnsServerDialFields(server)
+    count += migrateLegacyDnsServerOptions(config, server)
     if (server.type || !server.address) continue
     const address = String(server.address)
     const serverType = inferDnsServerType(address)
-    if (!serverType) continue
+    if (!serverType) {
+      if (/^rcode:\/\//i.test(address)) {
+        recordSkipped(report, 'legacy-rcode-dns-server', 1, `${address} 需要迁移为 predefined action`)
+      } else {
+        recordSkipped(report, 'legacy-dns-server', 1, `无法自动迁移 ${address}`)
+      }
+      continue
+    }
     server.type = serverType
-    if (['http3', 'https', 'tcp', 'udp', 'tls', 'quic'].includes(serverType)) {
-      server.server = normalizeDnsServerHost(address)
+    if (['h3', 'https', 'tcp', 'udp', 'tls', 'quic'].includes(serverType)) {
+      Object.assign(server, parseDnsServerAddress(address, serverType))
+    } else if (serverType === 'dhcp') {
+      const dhcpInterface = parseDhcpInterface(address)
+      if (dhcpInterface) server.interface = dhcpInterface
+    } else if (serverType === 'fakeip') {
+      applyLegacyFakeIpOptions(config, server)
     }
     delete server.address
     count += 1
   }
   recordForce(report, 'legacy-dns-server', count)
+}
+
+const migrateLegacyDnsServerDialFields = (server) => {
+  let count = 0
+  if (server.address_resolver !== undefined && server.domain_resolver === undefined) {
+    server.domain_resolver = server.address_resolver
+    count += 1
+  }
+  if (server.address_strategy !== undefined && server.domain_strategy === undefined) {
+    server.domain_strategy = server.address_strategy
+    count += 1
+  }
+  delete server.address_resolver
+  delete server.address_strategy
+  return count
+}
+
+const migrateLegacyDnsServerOptions = (config, server) => {
+  let count = 0
+  if (server.strategy !== undefined) {
+    count += moveDnsServerOptionToRules(config, server, 'strategy')
+  }
+  if (server.client_subnet !== undefined) {
+    count += moveDnsServerOptionToRules(config, server, 'client_subnet')
+  }
+  return count
+}
+
+const moveDnsServerOptionToRules = (config, server, key) => {
+  const value = server[key]
+  delete server[key]
+  if (value === undefined) return 0
+  if (!server.tag) {
+    if (config.dns[key] === undefined) {
+      config.dns[key] = value
+      return 1
+    }
+    return 0
+  }
+  const rules = config.dns.rules || []
+  let count = 0
+  for (const rule of rules) {
+    if (rule?.server !== server.tag || rule[key] !== undefined) continue
+    rule[key] = value
+    count += 1
+  }
+  if (count === 0) {
+    config.dns.rules = [
+      {
+        server: server.tag,
+        [key]: value
+      }
+    ].concat(rules)
+    count = 1
+  }
+  return count
 }
 
 const inferDnsServerType = (address) => {
@@ -240,7 +374,9 @@ const inferDnsServerType = (address) => {
   if (value === 'local') return 'local'
   if (value === 'fakeip' || value === 'fake-ip') return 'fakeip'
   if (value.startsWith('https://')) return 'https'
-  if (value.startsWith('h3://')) return 'http3'
+  if (value.startsWith('h3://')) return 'h3'
+  if (value.startsWith('dhcp://')) return 'dhcp'
+  if (value.startsWith('rcode://')) return ''
   if (value.startsWith('tls://')) return 'tls'
   if (value.startsWith('quic://')) return 'quic'
   if (value.startsWith('tcp://')) return 'tcp'
@@ -249,15 +385,44 @@ const inferDnsServerType = (address) => {
   return ''
 }
 
-const normalizeDnsServerHost = (address) => {
+const parseDnsServerAddress = (address, serverType) => {
   const value = String(address || '').trim()
-  if (!value) return ''
-  if (!value.includes('://')) return value
-  try {
-    return new URL(value).hostname
-  } catch {
-    return value.replace(/^[a-z0-9+.-]+:\/\//i, '')
+  if (!value) return {}
+  if (!value.includes('://')) return {
+    server: value
   }
+  try {
+    const url = new URL(value)
+    const parsed = {
+      server: url.hostname
+    }
+    if (url.port) parsed.server_port = Number(url.port)
+    if (['https', 'h3'].includes(serverType) && url.pathname && url.pathname !== '/') {
+      parsed.path = url.pathname
+    }
+    return parsed
+  } catch {
+    return {
+      server: value.replace(/^[a-z0-9+.-]+:\/\//i, '')
+    }
+  }
+}
+
+const parseDhcpInterface = (address) => {
+  const value = String(address || '').replace(/^dhcp:\/\//i, '').trim()
+  return value && value !== 'auto' ? value : ''
+}
+
+const applyLegacyFakeIpOptions = (config, server) => {
+  const fakeip = config?.dns?.fakeip
+  if (!fakeip || typeof fakeip !== 'object') return
+  if (server.inet4_range === undefined && fakeip.inet4_range !== undefined) {
+    server.inet4_range = fakeip.inet4_range
+  }
+  if (server.inet6_range === undefined && fakeip.inet6_range !== undefined) {
+    server.inet6_range = fakeip.inet6_range
+  }
+  delete config.dns.fakeip
 }
 
 const migrateOutboundDnsRules = (config, report) => {
@@ -392,19 +557,140 @@ const migrateDirectOverrideFields = (config, report) => {
   recordRecommend(report, 'direct-override', count)
 }
 
-const detectDnsResponseMatchNeeds = (config, report, settings) => {
+const migrateOutboundDomainStrategy = (config, report) => {
+  if (!Array.isArray(config?.outbounds)) return
+  let count = 0
+  const defaultResolver = findDefaultDomainResolver(config)
+  for (const outbound of config.outbounds) {
+    if (!outbound || outbound.domain_strategy === undefined) continue
+    const strategy = outbound.domain_strategy
+    if (outbound.domain_resolver === undefined) {
+      outbound.domain_resolver = defaultResolver !== undefined
+        ? {
+            server: defaultResolver,
+            strategy
+          }
+        : {
+            strategy
+          }
+    } else if (typeof outbound.domain_resolver === 'string') {
+      outbound.domain_resolver = {
+        server: outbound.domain_resolver,
+        strategy
+      }
+    } else if (outbound.domain_resolver && typeof outbound.domain_resolver === 'object' && outbound.domain_resolver.strategy === undefined) {
+      outbound.domain_resolver.strategy = strategy
+    }
+    delete outbound.domain_strategy
+    count += 1
+  }
+  recordRecommend(report, 'outbound-domain-strategy', count)
+}
+
+const migrateLegacyDnsOutbound = (config, report) => {
+  if (!Array.isArray(config?.outbounds)) return
+  const dnsOutboundTags = config.outbounds
+    .filter((outbound) => outbound?.type === 'dns' && outbound.tag)
+    .map((outbound) => outbound.tag)
+  if (dnsOutboundTags.length === 0) return
+
+  config.outbounds = config.outbounds.filter((outbound) => outbound?.type !== 'dns')
+  if (!config.route) config.route = {}
+  const routeRules = config.route.rules || []
+  let convertedRules = 0
+  for (const rule of routeRules) {
+    if (!rule || typeof rule !== 'object') continue
+    if (dnsOutboundTags.includes(rule.outbound) && isDnsHijackRule(rule)) {
+      delete rule.outbound
+      rule.action = 'hijack-dns'
+      convertedRules += 1
+    }
+  }
+  if (convertedRules === 0) {
+    config.route.rules = [
+      {
+        protocol: 'dns',
+        action: 'hijack-dns'
+      }
+    ].concat(routeRules)
+    convertedRules = 1
+  }
+  recordRecommend(report, 'legacy-dns-outbound', dnsOutboundTags.length + convertedRules)
+}
+
+const isDnsHijackRule = (rule) => {
+  if (rule.protocol === 'dns') return true
+  if (rule.port === 53 || rule.port === '53') return true
+  if (Array.isArray(rule.port) && rule.port.map(String).includes('53')) return true
+  return false
+}
+
+const migrateDnsResponseMatching = (config, report) => {
   const rules = config?.dns?.rules || []
-  const count = rules.filter((rule) => rule && !rule.match_response && (
-    rule.ip_cidr !== undefined ||
+  if (!Array.isArray(rules) || rules.length === 0) return
+  let count = 0
+  let evaluateInserted = false
+  let insertedServer = ''
+  const nextRules = []
+  for (let index = 0; index < rules.length; index += 1) {
+    const rule = rules[index]
+    if (!needsDnsResponseMatching(rule)) {
+      nextRules.push(rule)
+      continue
+    }
+    const evaluateServer = findDnsEvaluateServer(rules, index, config)
+    if (!evaluateServer) {
+      nextRules.push(rule)
+      recordSkipped(report, 'dns-response-match', 1, '未找到可用于 evaluate 的 DNS 服务器')
+      continue
+    }
+    if (!evaluateInserted && evaluateServer) {
+      nextRules.push({
+        action: 'evaluate',
+        server: evaluateServer
+      })
+      evaluateInserted = true
+      insertedServer = evaluateServer
+    }
+    rule.match_response = true
+    delete rule.rule_set_ip_cidr_accept_empty
+    nextRules.push(rule)
+    count += 1
+  }
+  config.dns.rules = nextRules
+  recordRecommend(report, 'dns-response-match', count, evaluateInserted ? `已插入 evaluate 到 ${insertedServer}` : '已补充 match_response')
+}
+
+const needsDnsResponseMatching = (rule) => {
+  if (!rule || typeof rule !== 'object' || rule.match_response) return false
+  return rule.ip_cidr !== undefined ||
     rule.ip_is_private !== undefined ||
     rule.rule_set_ip_cidr_accept_empty !== undefined
-  )).length
-  if (count === 0) return
-  if (settings.recommendationToggles.dnsResponseMatch) {
-    recordRecommend(report, 'dns-response-match', count, '需要按规则语义手动迁移为 evaluate + match_response。')
-  } else {
-    recordSkipped(report, 'dns-response-match', count)
+}
+
+const findDnsEvaluateServer = (rules, currentIndex, config) => {
+  for (let index = currentIndex + 1; index < rules.length; index += 1) {
+    const rule = rules[index]
+    if (rule?.server) return rule.server
   }
+  if (config?.dns?.final) return config.dns.final
+  const firstTaggedServer = (config?.dns?.servers || []).find((server) => server?.tag)
+  return firstTaggedServer?.tag || ''
+}
+
+const fixDnsRuleCompatibility = (config, report) => {
+  if (!Array.isArray(config?.dns?.rules)) return
+  migrateDnsResponseMatching(config, report)
+  const rules = config.dns.rules || []
+  let count = 0
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue
+    if ((rule.ip_version !== undefined || rule.query_type !== undefined) && rule.strategy !== undefined && rule.action === undefined) {
+      rule.action = 'route'
+      count += 1
+    }
+  }
+  recordRecommend(report, 'dns-rule-compatibility', count)
 }
 
 const detectInboundLegacyFields = (config, report, settings) => {
@@ -424,6 +710,21 @@ const applyFeatureInjections = (config, report, settings) => {
     injectRouteDefaultDomainResolver(config, report)
   } else {
     recordSkipped(report, 'route-default-domain-resolver')
+  }
+  if (settings.featureToggles.dnsOptimistic) {
+    injectDnsOptimistic(config, report)
+  } else {
+    recordSkipped(report, 'dns-optimistic')
+  }
+  if (settings.featureToggles.dnsTimeout) {
+    injectDnsTimeout(config, report)
+  } else {
+    recordSkipped(report, 'dns-timeout')
+  }
+  if (settings.featureToggles.tunDnsMode) {
+    injectTunDnsMode(config, report)
+  } else {
+    recordSkipped(report, 'tun-dns-mode')
   }
 }
 
@@ -460,6 +761,54 @@ const formatResolverLabel = (resolver) => {
   if (typeof resolver === 'string') return resolver
   if (resolver && typeof resolver === 'object' && resolver.server) return resolver.server
   return '默认解析器'
+}
+
+const injectDnsOptimistic = (config, report) => {
+  if (!config?.dns) return
+  if (config.dns.optimistic !== undefined) return
+  if (config.dns.disable_cache || config.dns.disable_expire) {
+    recordSkipped(report, 'dns-optimistic', 1, 'disable_cache / disable_expire 冲突')
+    return
+  }
+  config.dns.optimistic = {
+    enabled: true,
+    timeout: '3d'
+  }
+  recordInjected(report, 'dns-optimistic', 1)
+}
+
+const injectDnsTimeout = (config, report) => {
+  if (!config?.dns) return
+  if (config.dns.timeout !== undefined) return
+  config.dns.timeout = '10s'
+  recordInjected(report, 'dns-timeout', 1)
+}
+
+const injectTunDnsMode = (config, report) => {
+  const tunInbounds = (config?.inbounds || []).filter((inbound) => inbound?.type === 'tun')
+  if (tunInbounds.length === 0) return
+  let count = 0
+  for (const inbound of tunInbounds) {
+    if (inbound.dns_mode === undefined) {
+      inbound.dns_mode = 'hijack'
+      count += 1
+    }
+  }
+  count += ensureDnsHijackRouteRule(config)
+  recordInjected(report, 'tun-dns-mode', count)
+}
+
+const ensureDnsHijackRouteRule = (config) => {
+  if (!config.route) config.route = {}
+  const rules = config.route.rules || []
+  if (rules.some((rule) => rule?.action === 'hijack-dns')) return 0
+  config.route.rules = [
+    {
+      protocol: 'dns',
+      action: 'hijack-dns'
+    }
+  ].concat(rules)
+  return 1
 }
 
 const openManager = async () => {
@@ -787,8 +1136,14 @@ const getToggleKey = (id) => ({
   'cache-file-store-dns': 'cacheFileStoreDns',
   'direct-override': 'directOverride',
   'dns-response-match': 'dnsResponseMatch',
+  'outbound-domain-strategy': 'outboundDomainStrategy',
+  'legacy-dns-outbound': 'legacyDnsOutbound',
+  'dns-rule-compatibility': 'dnsRuleCompatibility',
   'inbound-legacy-fields': 'inboundLegacyFields',
-  'route-default-domain-resolver': 'routeDefaultDomainResolver'
+  'route-default-domain-resolver': 'routeDefaultDomainResolver',
+  'dns-optimistic': 'dnsOptimistic',
+  'dns-timeout': 'dnsTimeout',
+  'tun-dns-mode': 'tunDnsMode'
 })[id]
 
 const getAppliedReportItems = (report) => {
