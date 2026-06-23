@@ -77,6 +77,7 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 - 可在面板中填写 TUN DNS 地址，写入 `dns_address`；留空时使用 sing-box 自动派生地址。
 - 可选注入 `dns.optimistic` 和 `dns.timeout`，默认关闭，避免改变现有 DNS 缓存和超时策略。
 - 功能注入项在插件面板里单独展示，并可独立开关。
+- 核心运行中可在面板查看 `data/sing-box/config.json` 的完整运行时配置，用于确认插件转换后的实际效果。
 
 ## 配置持久化
 

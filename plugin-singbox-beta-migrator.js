@@ -951,6 +951,7 @@ const openManager = async () => {
   const { ref, h } = Vue
   const settings = ref(normalizeSettings(await loadSettings()))
   const preview = ref(await buildPreview(settings.value))
+  const runtimeConfig = ref(await loadRuntimeConfigText())
 
   const component = {
     template: `
@@ -962,6 +963,7 @@ const openManager = async () => {
         </div>
         <div class="flex gap-8">
           <Button @click="refreshPreview">刷新预览</Button>
+          <Button @click="refreshRuntimeConfig">刷新运行配置</Button>
           <Button type="primary" @click="save">保存</Button>
         </div>
       </div>
@@ -1053,6 +1055,22 @@ const openManager = async () => {
           </div>
         </div>
       </Card>
+
+      <Card>
+        <div class="flex items-center justify-between gap-8 mb-8">
+          <div>
+            <div class="font-bold text-14">运行中完整配置</div>
+            <div class="text-12 opacity-70">{{ runtimeConfig.statusText }}</div>
+          </div>
+          <Button @click="refreshRuntimeConfig">刷新</Button>
+        </div>
+        <textarea
+          v-model="runtimeConfig.content"
+          readonly
+          class="w-full p-8 rounded border outline-none resize-none font-mono text-12 box-border"
+          style="height: 360px; background: transparent; color: inherit; border-color: var(--el-border-color); box-sizing: border-box; line-height: 1.45;"
+        ></textarea>
+      </Card>
     </div>
     `,
     setup() {
@@ -1061,6 +1079,9 @@ const openManager = async () => {
       const refreshPreview = async () => {
         preview.value = await buildPreview(settings.value)
         getState().preview.value = preview.value
+      }
+      const refreshRuntimeConfig = async () => {
+        runtimeConfig.value = await loadRuntimeConfigText()
       }
       const save = async () => {
         const normalized = normalizeSettings(settings.value)
@@ -1076,6 +1097,7 @@ const openManager = async () => {
         pluginVersion: Plugin.version || '',
         settings,
         preview,
+        runtimeConfig,
         runModes: RUN_MODES,
         forceItems: CONVERSION_DEFINITIONS.filter((item) => item.level === 'force'),
         recommendItems: CONVERSION_DEFINITIONS.filter((item) => item.level === 'recommend').map((item) => ({
@@ -1095,6 +1117,7 @@ const openManager = async () => {
         getOptionLabel,
         getOptionValue,
         refreshPreview,
+        refreshRuntimeConfig,
         save
       }
     }
@@ -1130,6 +1153,39 @@ const buildPreview = async (settings) => {
   report.profileName = profile.name || ''
   report.totalDetected = getAppliedReportItems(report).concat(report.skipped).reduce((total, item) => total + item.count, 0)
   return report
+}
+
+const loadRuntimeConfigText = async () => {
+  const kernelApiStore = Plugins.useKernelApiStore()
+  if (!kernelApiStore.running) {
+    return {
+      statusText: '核心未运行，启动核心后可查看插件处理后的完整配置。',
+      content: ''
+    }
+  }
+  const content = await Plugins.ReadFile('data/sing-box/config.json').catch((error) => {
+    return {
+      error: error?.message || String(error)
+    }
+  })
+  if (content?.error) {
+    return {
+      statusText: '读取运行配置失败。',
+      content: content.error
+    }
+  }
+  return {
+    statusText: '读取自 data/sing-box/config.json，这是核心当前使用的运行时配置。',
+    content: formatRuntimeConfigText(content)
+  }
+}
+
+const formatRuntimeConfigText = (content) => {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2)
+  } catch {
+    return String(content || '')
+  }
 }
 
 const getCurrentProfile = () => {
