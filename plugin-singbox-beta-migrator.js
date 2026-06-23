@@ -17,6 +17,9 @@ const DEFAULT_SETTINGS = {
     directOverride: true,
     dnsResponseMatch: false,
     inboundLegacyFields: false
+  },
+  featureToggles: {
+    routeDefaultDomainResolver: true
   }
 }
 const CONVERSION_DEFINITIONS = [
@@ -67,6 +70,13 @@ const CONVERSION_DEFINITIONS = [
     level: 'recommend',
     title: '旧入站字段迁移提示',
     description: 'sniff / domain_strategy 等旧入站字段可迁移到规则动作，插件只提示不自动改。'
+  }
+]
+const FEATURE_DEFINITIONS = [
+  {
+    id: 'route-default-domain-resolver',
+    title: '注入默认域名解析器',
+    description: '当存在域名类出站且 route.default_domain_resolver 缺失时，按 1.14 新 DNS 处理注入默认解析器。'
   }
 ]
 
@@ -131,6 +141,10 @@ const normalizeSettings = (settings) => ({
   recommendationToggles: {
     ...DEFAULT_SETTINGS.recommendationToggles,
     ...(settings?.recommendationToggles || {})
+  },
+  featureToggles: {
+    ...DEFAULT_SETTINGS.featureToggles,
+    ...(settings?.featureToggles || {})
   }
 })
 
@@ -195,8 +209,9 @@ const applyMigrations = (config, settings, options = {}) => {
   }
   detectDnsResponseMatchNeeds(workingConfig, report, settings)
   detectInboundLegacyFields(workingConfig, report, settings)
+  applyFeatureInjections(workingConfig, report, settings)
 
-  report.totalApplied = report.force.concat(report.recommend).reduce((total, item) => total + item.count, 0)
+  report.totalApplied = getAppliedReportItems(report).reduce((total, item) => total + item.count, 0)
   return report
 }
 
@@ -404,6 +419,49 @@ const detectInboundLegacyFields = (config, report, settings) => {
   }
 }
 
+const applyFeatureInjections = (config, report, settings) => {
+  if (settings.featureToggles.routeDefaultDomainResolver) {
+    injectRouteDefaultDomainResolver(config, report)
+  } else {
+    recordSkipped(report, 'route-default-domain-resolver')
+  }
+}
+
+const injectRouteDefaultDomainResolver = (config, report) => {
+  if (!hasDomainOutboundWithoutResolver(config)) return
+  if (!config.route) config.route = {}
+  if (config.route.default_domain_resolver !== undefined) return
+
+  const resolver = findDefaultDomainResolver(config)
+  if (resolver === undefined) return
+  config.route.default_domain_resolver = resolver
+  recordInjected(report, 'route-default-domain-resolver', 1, `使用 ${formatResolverLabel(resolver)}`)
+}
+
+const hasDomainOutboundWithoutResolver = (config) => {
+  return (config?.outbounds || []).some((outbound) => {
+    if (!outbound || typeof outbound !== 'object') return false
+    if (outbound.domain_resolver !== undefined) return false
+    return isDomainHost(outbound.server) || isDomainHost(outbound.address)
+  })
+}
+
+const findDefaultDomainResolver = (config) => {
+  if (config?.dns?.final) return config.dns.final
+  const servers = config?.dns?.servers || []
+  const taggedServers = servers
+    .map((server) => server?.tag)
+    .filter((tag) => typeof tag === 'string' && tag.trim())
+  if (taggedServers.length === 1) return taggedServers[0]
+  return undefined
+}
+
+const formatResolverLabel = (resolver) => {
+  if (typeof resolver === 'string') return resolver
+  if (resolver && typeof resolver === 'object' && resolver.server) return resolver.server
+  return '默认解析器'
+}
+
 const openManager = async () => {
   const { ref, h } = Vue
   const settings = ref(normalizeSettings(await loadSettings()))
@@ -472,6 +530,22 @@ const openManager = async () => {
       </Card>
 
       <Card>
+        <div class="font-bold text-14 mb-8">功能注入</div>
+        <div class="grid gap-8" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+          <div v-for="item in featureItems" :key="item.id" class="rounded-4 p-8" style="border: 1px solid #cbd5e1; background: #f8fafc;">
+            <div class="flex items-start justify-between gap-8">
+              <div class="min-w-0">
+                <div class="font-bold text-13">{{ item.title }}</div>
+                <div class="text-12 opacity-75 mt-4">{{ item.description }}</div>
+              </div>
+              <Switch v-model="settings.featureToggles[item.toggleKey]">启用</Switch>
+            </div>
+            <div class="text-12 mt-6" style="color: #166534;">预览命中 {{ getReportCount(item.id) }} 项</div>
+          </div>
+        </div>
+      </Card>
+
+      <Card>
         <div class="font-bold text-14 mb-8">最近预览结果</div>
         <div class="grid gap-8" style="grid-template-columns: 1fr 1fr;">
           <div>
@@ -519,10 +593,14 @@ const openManager = async () => {
           ...item,
           toggleKey: getToggleKey(item.id)
         })),
+        featureItems: FEATURE_DEFINITIONS.map((item) => ({
+          ...item,
+          toggleKey: getToggleKey(item.id)
+        })),
         summaryText: Vue.computed(() => `预览配置：${preview.value.profileName || '未找到'}，命中 ${preview.value.totalDetected || 0} 项`),
         kernelText: Vue.computed(() => preview.value.kernel.version || '未检测到核心版本'),
         kernelSourceText: Vue.computed(() => preview.value.kernel.source || '无'),
-        appliedReportItems: Vue.computed(() => preview.value.force.concat(preview.value.recommend)),
+        appliedReportItems: Vue.computed(() => getAppliedReportItems(preview.value)),
         skippedReportItems: Vue.computed(() => preview.value.skipped),
         getReportCount: (id) => getReportCount(preview.value, id),
         getOptionLabel,
@@ -561,7 +639,7 @@ const buildPreview = async (settings) => {
   const kernelInfo = await getKernelInfo(normalizedSettings)
   const report = applyMigrations(generatedConfig || {}, normalizedSettings, { mutate: false, kernelInfo })
   report.profileName = profile.name || ''
-  report.totalDetected = report.force.concat(report.recommend, report.skipped).reduce((total, item) => total + item.count, 0)
+  report.totalDetected = getAppliedReportItems(report).concat(report.skipped).reduce((total, item) => total + item.count, 0)
   return report
 }
 
@@ -709,11 +787,18 @@ const getToggleKey = (id) => ({
   'cache-file-store-dns': 'cacheFileStoreDns',
   'direct-override': 'directOverride',
   'dns-response-match': 'dnsResponseMatch',
-  'inbound-legacy-fields': 'inboundLegacyFields'
+  'inbound-legacy-fields': 'inboundLegacyFields',
+  'route-default-domain-resolver': 'routeDefaultDomainResolver'
 })[id]
 
+const getAppliedReportItems = (report) => {
+  return toArray(report?.force).concat(toArray(report?.recommend), toArray(report?.inject))
+}
+
 const getReportCount = (report, id) => {
-  const item = report.force.concat(report.recommend, report.skipped).find((entry) => entry.id === id)
+  const item = getAppliedReportItems(report)
+    .concat(toArray(report?.skipped))
+    .find((entry) => entry?.id === id)
   return item?.count || 0
 }
 
@@ -721,13 +806,15 @@ const recordForce = (report, id, count, note = '') => recordReportItem(report.fo
 
 const recordRecommend = (report, id, count, note = '') => recordReportItem(report.recommend, id, count, note)
 
+const recordInjected = (report, id, count, note = '') => recordReportItem(report.inject, id, count, note)
+
 const recordSkipped = (report, id, count = 0, note = '') => {
   if (count > 0) recordReportItem(report.skipped, id, count, note)
 }
 
 const recordReportItem = (items, id, count, note = '') => {
   if (!count) return
-  const definition = CONVERSION_DEFINITIONS.find((item) => item.id === id)
+  const definition = CONVERSION_DEFINITIONS.concat(FEATURE_DEFINITIONS).find((item) => item.id === id)
   items.push({
     id,
     title: definition?.title || id,
@@ -747,6 +834,7 @@ function createEmptyReport() {
     },
     force: [],
     recommend: [],
+    inject: [],
     skipped: [],
     totalApplied: 0,
     totalDetected: 0
@@ -767,6 +855,13 @@ function clone(value) {
 
 function isIpLikeHost(value) {
   return /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(value) || /^\[[0-9a-f:]+](:\d+)?$/i.test(value)
+}
+
+function isDomainHost(value) {
+  const host = String(value || '').trim()
+  if (!host) return false
+  if (isIpLikeHost(host)) return false
+  return /[a-z]/i.test(host)
 }
 
 export default {

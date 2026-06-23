@@ -61,6 +61,11 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 - direct 出站 `override_address` / `override_port` 改为 `route-options` 规则。
 - 复杂 outbound DNS 规则、DNS 响应匹配和旧入站字段只提示，不默认自动改复杂语义。
 
+功能注入：
+
+- 默认域名解析器注入：当存在域名类出站且缺少 `domain_resolver` / `route.default_domain_resolver` 时，从 `dns.final` 或唯一 DNS 服务器 tag 注入 `route.default_domain_resolver`。
+- 功能注入项在插件面板里单独展示，并可独立开关。
+
 ## 配置持久化
 
 插件配置保存到：
