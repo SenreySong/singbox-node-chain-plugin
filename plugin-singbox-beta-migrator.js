@@ -206,6 +206,7 @@ const loadSettings = async () => {
     getState().settings.value = await readSettings()
     getState().loaded = true
   }
+  getState().settings.value = normalizeSettings(getState().settings.value)
   return getState().settings.value
 }
 
@@ -259,6 +260,7 @@ const onBeforeCoreStart = async (config) => {
 }
 
 const applyMigrations = (config, settings, options = {}) => {
+  settings = normalizeSettings(settings)
   const workingConfig = options.mutate ? config : clone(config || {})
   const report = createEmptyReport()
   report.kernel = options.kernelInfo || {
@@ -834,6 +836,7 @@ const detectInboundLegacyFields = (config, report, settings) => {
 }
 
 const applyFeatureInjections = (config, report, settings) => {
+  settings = normalizeSettings(settings)
   if (settings.featureToggles.routeDefaultDomainResolver) {
     injectRouteDefaultDomainResolver(config, report)
   } else {
