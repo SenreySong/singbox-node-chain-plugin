@@ -9,6 +9,7 @@ const RUN_MODES = [
 const DEFAULT_SETTINGS = {
   enabled: true,
   runMode: 'beta_only',
+  manualKernelVersion: '',
   notifyOnApply: true,
   recommendationToggles: {
     dnsCache: true,
@@ -125,6 +126,7 @@ const loadSettings = async () => {
 const normalizeSettings = (settings) => ({
   enabled: settings?.enabled !== false,
   runMode: normalizeRunMode(settings?.runMode),
+  manualKernelVersion: String(settings?.manualKernelVersion || '').trim(),
   notifyOnApply: settings?.notifyOnApply !== false,
   recommendationToggles: {
     ...DEFAULT_SETTINGS.recommendationToggles,
@@ -149,7 +151,7 @@ const onRun = async () => {
 const onBeforeCoreStart = async (config) => {
   const settings = await loadSettings()
   if (!settings.enabled || settings.runMode === 'preview_only') return config
-  const kernelInfo = getKernelInfo()
+  const kernelInfo = getKernelInfo(settings)
   const shouldApply = settings.runMode === 'always' || kernelInfo.isPrerelease
   if (!shouldApply) return config
 
@@ -164,7 +166,7 @@ const onBeforeCoreStart = async (config) => {
 const applyMigrations = (config, settings, options = {}) => {
   const workingConfig = options.mutate ? config : clone(config || {})
   const report = createEmptyReport()
-  report.kernel = getKernelInfo()
+  report.kernel = getKernelInfo(settings)
   report.enabled = settings.enabled
   report.runMode = settings.runMode
 
@@ -431,6 +433,10 @@ const openManager = async () => {
           <Switch v-model="settings.notifyOnApply">启用</Switch>
           <div class="font-bold text-13">检测到的核心</div>
           <div class="text-12 opacity-75" style="word-break: break-word;">{{ kernelText }}</div>
+          <div class="font-bold text-13">手动核心版本</div>
+          <Input v-model="settings.manualKernelVersion" placeholder="例如 1.14.0-alpha.33，可空" allow-paste />
+          <div class="font-bold text-13">检测来源</div>
+          <div class="text-12 opacity-75" style="word-break: break-word;">{{ kernelSourceText }}</div>
         </div>
       </Card>
 
@@ -511,6 +517,7 @@ const openManager = async () => {
         })),
         summaryText: Vue.computed(() => `预览配置：${preview.value.profileName || '未找到'}，命中 ${preview.value.totalDetected || 0} 项`),
         kernelText: Vue.computed(() => preview.value.kernel.version || '未检测到核心版本'),
+        kernelSourceText: Vue.computed(() => preview.value.kernel.source || '无'),
         appliedReportItems: Vue.computed(() => preview.value.force.concat(preview.value.recommend)),
         skippedReportItems: Vue.computed(() => preview.value.skipped),
         getReportCount: (id) => getReportCount(preview.value, id),
@@ -560,53 +567,107 @@ const getCurrentProfile = () => {
   return profiles.find((profile) => profile.id === currentProfileId) || profilesStore.currentProfile || profiles[0]
 }
 
-const getKernelInfo = () => {
+const getKernelInfo = (settings = {}) => {
+  const manualVersion = String(settings.manualKernelVersion || '').trim()
+  if (manualVersion) {
+    return {
+      version: manualVersion,
+      isPrerelease: isPrereleaseVersion(manualVersion),
+      source: '手动填写'
+    }
+  }
+
   const sources = []
   for (const getter of [Plugins.useKernelApiStore, Plugins.useAppSettingsStore, Plugins.useEnvStore]) {
     try {
       sources.push(getter())
     } catch {}
   }
-  const version = findVersionString(sources)
+  const matched = findKernelVersionCandidate(sources)
   return {
-    version,
-    isPrerelease: /(?:alpha|beta|rc|testing|nightly|dev)/i.test(version)
+    version: matched.version,
+    isPrerelease: isPrereleaseVersion(matched.version),
+    source: matched.source
   }
 }
 
-const findVersionString = (values) => {
+const findKernelVersionCandidate = (values) => {
   const seen = new Set()
-  const stack = [].concat(values || [])
+  const stack = [].concat(values || []).map((value, index) => ({
+    value,
+    path: `store${index}`
+  }))
   const candidates = []
   while (stack.length > 0 && seen.size < 800) {
-    const value = stack.shift()
+    const item = stack.shift()
+    const value = item.value
     if (value === null || value === undefined) continue
     if (typeof value === 'string') {
-      if (isVersionCandidate(value)) candidates.push(value)
+      if (isKernelPath(item.path) && isVersionCandidate(value)) {
+        candidates.push({
+          version: value,
+          source: item.path
+        })
+      }
       continue
     }
     if (typeof value !== 'object' || seen.has(value)) continue
     seen.add(value)
     for (const [key, child] of Object.entries(value)) {
-      if (/version|kernel|core|sing/i.test(key) && typeof child === 'string') {
-        if (isVersionCandidate(child)) candidates.push(child)
+      const childPath = `${item.path}.${key}`
+      if (typeof child === 'string') {
+        if (isKernelPath(childPath) && isVersionCandidate(child)) {
+          candidates.push({
+            version: child,
+            source: childPath
+          })
+        }
+        continue
       }
-      if (child && typeof child === 'object') stack.push(child)
+      if (child && typeof child === 'object' && isPotentialKernelPath(childPath)) {
+        stack.push({
+          value: child,
+          path: childPath
+        })
+      }
     }
   }
   return selectVersionCandidate(candidates)
 }
+
+const isKernelPath = (path) => {
+  return /(?:kernel|core|sing.?box|singbox)/i.test(path) && /(?:version|name|path|core|kernel|sing.?box|singbox)/i.test(path)
+}
+
+const isPotentialKernelPath = (path) => {
+  return /(?:^store\d+$|\.app$|\.env$|kernel|core|sing.?box|singbox)/i.test(path)
+}
+
+const isPrereleaseVersion = (version) => /(?:alpha|beta|rc|testing|nightly|dev)/i.test(String(version || ''))
 
 const isVersionCandidate = (value) => {
   return /alpha|beta|rc|testing|nightly|dev|\d+\.\d+\.\d+/i.test(String(value || ''))
 }
 
 const selectVersionCandidate = (candidates) => {
-  const uniqueCandidates = unique(candidates.map((value) => String(value || '').trim()))
-  return uniqueCandidates.find((value) => /alpha|beta|rc|testing|nightly|dev/i.test(value)) ||
-    uniqueCandidates.find((value) => /\d+\.\d+\.\d+/.test(value)) ||
+  const uniqueCandidates = []
+  const seen = new Set()
+  for (const candidate of candidates) {
+    const version = String(candidate.version || '').trim()
+    if (!version || seen.has(version)) continue
+    seen.add(version)
+    uniqueCandidates.push({
+      version,
+      source: candidate.source || '自动检测'
+    })
+  }
+  return uniqueCandidates.find((candidate) => isPrereleaseVersion(candidate.version)) ||
+    uniqueCandidates.find((candidate) => /\d+\.\d+\.\d+/.test(candidate.version)) ||
     uniqueCandidates[0] ||
-    ''
+    {
+      version: '',
+      source: ''
+    }
 }
 
 const getToggleKey = (id) => ({

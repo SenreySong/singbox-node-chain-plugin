@@ -46,6 +46,7 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 
 `plugin-singbox-beta-migrator.js` 会在启动核心前处理最终生成配置，用于适配 sing-box 测试版核心的新配置要求。
 它只修改传给核心启动的最终配置，不直接改订阅文件或原始 profile。
+如果 GFS 没有暴露 sing-box 核心版本，可以在插件面板手动填写核心版本，例如 `1.14.0-alpha.33`。
 
 强制类转换：
 

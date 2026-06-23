@@ -1,9 +1,9 @@
 {
   "id": "plugin-singbox-beta-migrator",
   "name": "测试版核心配置迁移",
-  "version": "v1.0.0",
+  "version": "v1.0.1",
   "group": "Extensions",
-  "description": "在使用 sing-box 测试版核心时，启动前自动转换部分新版本不兼容配置，并展示强制类与推荐类迁移项。 作者：SenreySong",
+  "description": "在使用 sing-box 测试版核心时，启动前自动转换部分新版本不兼容配置，支持手动指定核心版本。 作者：SenreySong",
   "tags": ["实用工具", "功能扩展", "迁移"],
   "type": "Http",
   "url": "https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plugin-singbox-beta-migrator.js",
