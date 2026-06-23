@@ -19,6 +19,10 @@ const DEFAULT_SETTINGS = {
     outboundDomainStrategy: true,
     legacyDnsOutbound: true,
     dnsRuleCompatibility: true,
+    remoteRuleSetHttpClient: true,
+    inlineAcme: true,
+    removedTailscaleHttpClient: true,
+    hysteriaDeprecatedFields: false,
     inboundLegacyFields: false
   },
   featureToggles: {
@@ -26,6 +30,9 @@ const DEFAULT_SETTINGS = {
     dnsOptimistic: false,
     dnsTimeout: false,
     tunDnsMode: true
+  },
+  featureOptions: {
+    tunDnsAddress: ''
   }
 }
 const CONVERSION_DEFINITIONS = [
@@ -94,6 +101,30 @@ const CONVERSION_DEFINITIONS = [
     level: 'recommend',
     title: 'DNS 规则兼容性修正',
     description: '修正 1.14 中 ip_version/query_type 与旧地址筛选字段混用导致的启动失败。'
+  },
+  {
+    id: 'remote-ruleset-http-client',
+    level: 'recommend',
+    title: '远程规则集 HTTP 客户端迁移',
+    description: '把 rule_set.download_detour 迁移为 1.14 的 http_client。'
+  },
+  {
+    id: 'inline-acme',
+    level: 'recommend',
+    title: '内联 ACME 迁移',
+    description: '把 tls.acme 迁移为 tls.certificate_provider。'
+  },
+  {
+    id: 'removed-tailscale-http-client',
+    level: 'recommend',
+    title: 'Tailscale 已移除字段清理',
+    description: '清理 1.14 中已移除的 Tailscale control_http_client。'
+  },
+  {
+    id: 'hysteria-deprecated-fields',
+    level: 'recommend',
+    title: 'Hysteria 旧 QUIC 参数提示',
+    description: '检测 Hysteria v1 旧窗口和 MTU 字段，提示迁移到统一 QUIC 参数。'
   },
   {
     id: 'inbound-legacy-fields',
@@ -190,6 +221,11 @@ const normalizeSettings = (settings) => ({
   featureToggles: {
     ...DEFAULT_SETTINGS.featureToggles,
     ...(settings?.featureToggles || {})
+  },
+  featureOptions: {
+    ...DEFAULT_SETTINGS.featureOptions,
+    ...(settings?.featureOptions || {}),
+    tunDnsAddress: String(settings?.featureOptions?.tunDnsAddress || '').trim()
   }
 })
 
@@ -272,6 +308,22 @@ const applyMigrations = (config, settings, options = {}) => {
   } else {
     recordSkipped(report, 'dns-rule-compatibility')
   }
+  if (settings.recommendationToggles.remoteRuleSetHttpClient) {
+    migrateRemoteRuleSetHttpClient(workingConfig, report)
+  } else {
+    recordSkipped(report, 'remote-ruleset-http-client')
+  }
+  if (settings.recommendationToggles.inlineAcme) {
+    migrateInlineAcme(workingConfig, report)
+  } else {
+    recordSkipped(report, 'inline-acme')
+  }
+  if (settings.recommendationToggles.removedTailscaleHttpClient) {
+    removeTailscaleControlHttpClient(workingConfig, report)
+  } else {
+    recordSkipped(report, 'removed-tailscale-http-client')
+  }
+  detectHysteriaDeprecatedFields(workingConfig, report, settings)
   detectInboundLegacyFields(workingConfig, report, settings)
   applyFeatureInjections(workingConfig, report, settings)
 
@@ -693,6 +745,82 @@ const fixDnsRuleCompatibility = (config, report) => {
   recordRecommend(report, 'dns-rule-compatibility', count)
 }
 
+const migrateRemoteRuleSetHttpClient = (config, report) => {
+  const ruleSets = config?.route?.rule_set || []
+  if (!Array.isArray(ruleSets)) return
+  let count = 0
+  for (const ruleSet of ruleSets) {
+    if (!ruleSet || typeof ruleSet !== 'object') continue
+    if (ruleSet.download_detour === undefined) continue
+    if (ruleSet.http_client === undefined) {
+      ruleSet.http_client = {
+        detour: ruleSet.download_detour
+      }
+      count += 1
+    } else {
+      recordSkipped(report, 'remote-ruleset-http-client', 1, `${ruleSet.tag || '未命名规则集'} 已存在 http_client`)
+    }
+    delete ruleSet.download_detour
+  }
+  recordRecommend(report, 'remote-ruleset-http-client', count)
+}
+
+const migrateInlineAcme = (config, report) => {
+  let count = 0
+  for (const holder of collectObjects(config)) {
+    const tls = holder?.tls
+    if (!tls || typeof tls !== 'object' || tls.acme === undefined) continue
+    if (tls.certificate_provider === undefined) {
+      tls.certificate_provider = {
+        type: 'acme',
+        ...clone(tls.acme)
+      }
+      count += 1
+    } else {
+      recordSkipped(report, 'inline-acme', 1, '已存在 certificate_provider')
+    }
+    delete tls.acme
+  }
+  recordRecommend(report, 'inline-acme', count)
+}
+
+const removeTailscaleControlHttpClient = (config, report) => {
+  let count = 0
+  for (const holder of collectObjects(config)) {
+    if (!holder || typeof holder !== 'object') continue
+    if (holder.control_http_client === undefined) continue
+    if (!isTailscaleRelatedObject(holder)) continue
+    delete holder.control_http_client
+    count += 1
+  }
+  recordRecommend(report, 'removed-tailscale-http-client', count)
+}
+
+const isTailscaleRelatedObject = (value) => {
+  return value.type === 'tailscale' ||
+    value.endpoint === 'tailscale' ||
+    value.tailnet !== undefined ||
+    value.control_url !== undefined ||
+    value.accept_routes !== undefined ||
+    value.exit_node !== undefined
+}
+
+const detectHysteriaDeprecatedFields = (config, report, settings) => {
+  const outbounds = config?.outbounds || []
+  const inbounds = config?.inbounds || []
+  const deprecatedKeys = ['recv_window_conn', 'recv_window', 'recv_window_client', 'max_conn_client', 'disable_mtu_discovery']
+  const count = outbounds.concat(inbounds).filter((item) => {
+    if (!item || item.type !== 'hysteria') return false
+    return deprecatedKeys.some((key) => item[key] !== undefined)
+  }).length
+  if (count === 0) return
+  if (settings.recommendationToggles.hysteriaDeprecatedFields) {
+    recordRecommend(report, 'hysteria-deprecated-fields', count, '需要按带宽和 QUIC 参数语义手动迁移。')
+  } else {
+    recordSkipped(report, 'hysteria-deprecated-fields', count)
+  }
+}
+
 const detectInboundLegacyFields = (config, report, settings) => {
   const inbounds = config?.inbounds || []
   const legacyKeys = ['sniff', 'sniff_override_destination', 'domain_strategy']
@@ -722,7 +850,7 @@ const applyFeatureInjections = (config, report, settings) => {
     recordSkipped(report, 'dns-timeout')
   }
   if (settings.featureToggles.tunDnsMode) {
-    injectTunDnsMode(config, report)
+    injectTunDnsMode(config, report, settings)
   } else {
     recordSkipped(report, 'tun-dns-mode')
   }
@@ -784,13 +912,18 @@ const injectDnsTimeout = (config, report) => {
   recordInjected(report, 'dns-timeout', 1)
 }
 
-const injectTunDnsMode = (config, report) => {
+const injectTunDnsMode = (config, report, settings) => {
   const tunInbounds = (config?.inbounds || []).filter((inbound) => inbound?.type === 'tun')
   if (tunInbounds.length === 0) return
   let count = 0
+  const dnsAddress = settings.featureOptions?.tunDnsAddress
   for (const inbound of tunInbounds) {
     if (inbound.dns_mode === undefined) {
       inbound.dns_mode = 'hijack'
+      count += 1
+    }
+    if (dnsAddress && inbound.dns_address === undefined) {
+      inbound.dns_address = splitCsv(dnsAddress)
       count += 1
     }
   }
@@ -880,6 +1013,10 @@ const openManager = async () => {
 
       <Card>
         <div class="font-bold text-14 mb-8">功能注入</div>
+        <div class="grid items-center gap-8 mb-8" style="grid-template-columns: 150px minmax(220px, 1fr);">
+          <div class="font-bold text-13">TUN DNS 地址</div>
+          <Input v-model="settings.featureOptions.tunDnsAddress" placeholder="例如 172.18.0.2,fdfe:dcba:9876::2，可空" allow-paste />
+        </div>
         <div class="grid gap-8" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
           <div v-for="item in featureItems" :key="item.id" class="rounded-4 p-8" style="border: 1px solid #cbd5e1; background: #f8fafc;">
             <div class="flex items-start justify-between gap-8">
@@ -1139,6 +1276,10 @@ const getToggleKey = (id) => ({
   'outbound-domain-strategy': 'outboundDomainStrategy',
   'legacy-dns-outbound': 'legacyDnsOutbound',
   'dns-rule-compatibility': 'dnsRuleCompatibility',
+  'remote-ruleset-http-client': 'remoteRuleSetHttpClient',
+  'inline-acme': 'inlineAcme',
+  'removed-tailscale-http-client': 'removedTailscaleHttpClient',
+  'hysteria-deprecated-fields': 'hysteriaDeprecatedFields',
   'inbound-legacy-fields': 'inboundLegacyFields',
   'route-default-domain-resolver': 'routeDefaultDomainResolver',
   'dns-optimistic': 'dnsOptimistic',
@@ -1204,8 +1345,31 @@ function unique(items) {
   return Array.from(new Set(items.filter((item) => item !== undefined && item !== null && item !== '')))
 }
 
+function splitCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+function collectObjects(root) {
+  const result = []
+  const stack = [root]
+  const seen = new Set()
+  while (stack.length > 0) {
+    const value = stack.pop()
+    if (!value || typeof value !== 'object' || seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+    for (const child of Object.values(value)) {
+      if (child && typeof child === 'object') stack.push(child)
+    }
+  }
+  return result
 }
 
 function isIpLikeHost(value) {

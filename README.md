@@ -64,12 +64,17 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 - 旧 `type=dns` 出站和对应路由规则迁移为 `hijack-dns`。
 - DNS 地址筛选规则迁移为 `evaluate + match_response`。
 - 修正 `ip_version` / `query_type` 与旧 DNS 规则字段混用导致的 1.14 启动失败。
+- 远程规则集 `download_detour` 迁移为 `http_client.detour`。
+- 内联 `tls.acme` 迁移为 `tls.certificate_provider`。
+- 清理 Tailscale 中已移除的 `control_http_client`。
+- 检测 Hysteria v1 旧 QUIC 调优字段，并在面板中提示。
 - 旧入站字段只提示，不默认自动改复杂语义。
 
 功能注入：
 
 - 默认域名解析器注入：当存在域名类出站且缺少 `domain_resolver` / `route.default_domain_resolver` 时，从 `dns.final` 或唯一 DNS 服务器 tag 注入 `route.default_domain_resolver`。
 - TUN DNS 模式注入：当存在 TUN 入站时注入 `dns_mode: hijack`，并补充显式 `hijack-dns` 路由规则。
+- 可在面板中填写 TUN DNS 地址，写入 `dns_address`；留空时使用 sing-box 自动派生地址。
 - 可选注入 `dns.optimistic` 和 `dns.timeout`，默认关闭，避免改变现有 DNS 缓存和超时策略。
 - 功能注入项在插件面板里单独展示，并可独立开关。
 
