@@ -641,28 +641,38 @@ const recordReportItem = (items, id, count, note = '') => {
   })
 }
 
-const createEmptyReport = () => ({
-  profileName: '',
-  enabled: true,
-  runMode: DEFAULT_SETTINGS.runMode,
-  kernel: {
-    version: '',
-    isPrerelease: false
-  },
-  force: [],
-  recommend: [],
-  skipped: [],
-  totalApplied: 0,
-  totalDetected: 0
-})
+function createEmptyReport() {
+  return {
+    profileName: '',
+    enabled: true,
+    runMode: DEFAULT_SETTINGS.runMode,
+    kernel: {
+      version: '',
+      isPrerelease: false
+    },
+    force: [],
+    recommend: [],
+    skipped: [],
+    totalApplied: 0,
+    totalDetected: 0
+  }
+}
 
-const toArray = (value) => Array.isArray(value) ? value : value === undefined ? [] : [value]
+function toArray(value) {
+  return Array.isArray(value) ? value : value === undefined ? [] : [value]
+}
 
-const unique = (items) => Array.from(new Set(items.filter((item) => item !== undefined && item !== null && item !== '')))
+function unique(items) {
+  return Array.from(new Set(items.filter((item) => item !== undefined && item !== null && item !== '')))
+}
 
-const clone = (value) => JSON.parse(JSON.stringify(value))
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
 
-const isIpLikeHost = (value) => /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(value) || /^\[[0-9a-f:]+](:\d+)?$/i.test(value)
+function isIpLikeHost(value) {
+  return /^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(value) || /^\[[0-9a-f:]+](:\d+)?$/i.test(value)
+}
 
 export default {
   onReady,
