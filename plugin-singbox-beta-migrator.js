@@ -151,11 +151,11 @@ const onRun = async () => {
 const onBeforeCoreStart = async (config) => {
   const settings = await loadSettings()
   if (!settings.enabled || settings.runMode === 'preview_only') return config
-  const kernelInfo = getKernelInfo(settings)
+  const kernelInfo = await getKernelInfo(settings)
   const shouldApply = settings.runMode === 'always' || kernelInfo.isPrerelease
   if (!shouldApply) return config
 
-  const report = applyMigrations(config, settings, { mutate: true })
+  const report = applyMigrations(config, settings, { mutate: true, kernelInfo })
   getState().preview.value = report
   if (settings.notifyOnApply && report.totalApplied > 0) {
     Plugins.message.info(`测试版核心兼容转换已应用 ${report.totalApplied} 项`)
@@ -166,7 +166,11 @@ const onBeforeCoreStart = async (config) => {
 const applyMigrations = (config, settings, options = {}) => {
   const workingConfig = options.mutate ? config : clone(config || {})
   const report = createEmptyReport()
-  report.kernel = getKernelInfo(settings)
+  report.kernel = options.kernelInfo || {
+    version: '',
+    isPrerelease: false,
+    source: ''
+  }
   report.enabled = settings.enabled
   report.runMode = settings.runMode
 
@@ -553,7 +557,9 @@ const buildPreview = async (settings) => {
     return createEmptyReport()
   }
   const generatedConfig = await Plugins.generateConfig(profile, { enablePluginProcessing: false }).catch(() => null)
-  const report = applyMigrations(generatedConfig || {}, normalizeSettings(settings), { mutate: false })
+  const normalizedSettings = normalizeSettings(settings)
+  const kernelInfo = await getKernelInfo(normalizedSettings)
+  const report = applyMigrations(generatedConfig || {}, normalizedSettings, { mutate: false, kernelInfo })
   report.profileName = profile.name || ''
   report.totalDetected = report.force.concat(report.recommend, report.skipped).reduce((total, item) => total + item.count, 0)
   return report
@@ -567,13 +573,22 @@ const getCurrentProfile = () => {
   return profiles.find((profile) => profile.id === currentProfileId) || profilesStore.currentProfile || profiles[0]
 }
 
-const getKernelInfo = (settings = {}) => {
+const getKernelInfo = async (settings = {}) => {
   const manualVersion = String(settings.manualKernelVersion || '').trim()
   if (manualVersion) {
     return {
       version: manualVersion,
       isPrerelease: isPrereleaseVersion(manualVersion),
       source: '手动填写'
+    }
+  }
+
+  const realVersion = await getKernelVersionByExec()
+  if (realVersion) {
+    return {
+      version: realVersion,
+      isPrerelease: isPrereleaseVersion(realVersion),
+      source: '核心执行结果'
     }
   }
 
@@ -589,6 +604,25 @@ const getKernelInfo = (settings = {}) => {
     isPrerelease: isPrereleaseVersion(matched.version),
     source: matched.source
   }
+}
+
+const getKernelVersionByExec = async () => {
+  try {
+    const appSettingsStore = Plugins.useAppSettingsStore()
+    const branch = appSettingsStore.app?.kernel?.branch
+    const kernelFileName = await Plugins.getKernelFileName(branch !== 'main')
+    const kernelFilePath = await Plugins.AbsolutePath('data/sing-box/' + kernelFileName)
+    const output = await Plugins.Exec(kernelFilePath, ['version'])
+    return parseSingBoxVersion(output)
+  } catch {
+    return ''
+  }
+}
+
+const parseSingBoxVersion = (output) => {
+  const firstLine = String(output || '').split('\n')[0] || ''
+  const matched = firstLine.match(/(?:sing-box\s+version\s+)?(\d+\.\d+\.\d+(?:[-+][^\s]+)?)/i)
+  return matched?.[1] || ''
 }
 
 const findKernelVersionCandidate = (values) => {
