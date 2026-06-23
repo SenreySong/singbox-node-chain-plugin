@@ -87,6 +87,7 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 - TCP 延迟测试默认使用 `https://cp.cloudflare.com/generate_204`。
 - 下载测速默认使用 `https://speed.cloudflare.com/__down?bytes=25000000`，可自定义测速地址和下载字节数。
 - 测试时会启动独立临时 sing-box 核心，每个节点绑定独立本地 HTTP 入站端口，避免并发测速互相串线。
+- 默认启用旁路当前 TUN：自动检测系统默认物理接口，并给临时核心 DNS 和被测出站写入 `bind_interface` / `route.default_interface`；也可手动指定接口名。
 - 测试结果保存到插件历史中，便于多次对比。
 
 ## 配置持久化

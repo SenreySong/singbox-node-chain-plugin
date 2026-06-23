@@ -29,6 +29,8 @@ const DEFAULT_SETTINGS = {
   concurrencyLimit: 3,
   speedBytes: 25000000,
   historyLimit: 200,
+  bypassTun: true,
+  bindInterface: '',
   selectedNodeTags: [],
   selectedGroupTags: []
 }
@@ -148,6 +150,8 @@ const normalizeSettings = (settings) => ({
   concurrencyLimit: normalizePositiveInteger(settings?.concurrencyLimit, DEFAULT_SETTINGS.concurrencyLimit, 1, 20),
   speedBytes: normalizePositiveInteger(settings?.speedBytes, DEFAULT_SETTINGS.speedBytes, 1024, 500000000),
   historyLimit: normalizePositiveInteger(settings?.historyLimit, DEFAULT_SETTINGS.historyLimit, 20, 1000),
+  bypassTun: settings?.bypassTun !== false,
+  bindInterface: String(settings?.bindInterface || '').trim(),
   selectedNodeTags: uniqueStrings(settings?.selectedNodeTags),
   selectedGroupTags: uniqueStrings(settings?.selectedGroupTags)
 })
@@ -199,8 +203,12 @@ const openManager = async () => {
           <Input v-model="settings.concurrencyLimit" type="number" editable />
           <div class="font-bold text-13">历史保留</div>
           <Input v-model="settings.historyLimit" type="number" editable />
+          <div class="font-bold text-13">旁路当前 TUN</div>
+          <Switch v-model="settings.bypassTun">启用</Switch>
+          <div class="font-bold text-13">物理接口</div>
+          <Input v-model="settings.bindInterface" placeholder="自动检测，或手动填 en0/en12" allow-paste />
           <div class="text-12 opacity-70" style="grid-column: 2 / -1;">
-            默认延迟地址使用 Cloudflare CP；默认测速地址使用 Cloudflare speedtest 下载文件。
+            默认延迟地址使用 Cloudflare CP；默认测速地址使用 Cloudflare speedtest 下载文件。启用旁路时会自动检测默认物理接口，也可手动填写。
           </div>
         </div>
       </Card>
@@ -447,7 +455,7 @@ const resolveSelectedNodes = (nodes, groups, settings) => {
 }
 
 const executeTests = async (sourceConfig, selectedNodes, settings) => {
-  const runtime = await startRuntime(sourceConfig, selectedNodes)
+  const runtime = await startRuntime(sourceConfig, selectedNodes, settings)
   let completed = 0
   const total = selectedNodes.length
   const msg = Plugins.message.info(`TCP 测试中 0 / ${total}`, 999999)
@@ -472,7 +480,7 @@ const executeTests = async (sourceConfig, selectedNodes, settings) => {
   }
 }
 
-const startRuntime = async (sourceConfig, selectedNodes) => {
+const startRuntime = async (sourceConfig, selectedNodes, settings) => {
   await stopRuntime()
   const secret = Plugins.generateSecureKey()
   const ports = await getAvailablePorts(selectedNodes.length + 1)
@@ -483,7 +491,8 @@ const startRuntime = async (sourceConfig, selectedNodes) => {
   const configPath = `${runtimeDir}/config.json`
   await Plugins.MakeDir(runtimeDir).catch(() => {})
   const portMap = new Map(selectedNodes.map((node, index) => [node.tag, httpPorts[index]]))
-  const runtimeConfig = createRuntimeConfig(sourceConfig, selectedNodes, controller, secret, portMap)
+  const bindInterface = await resolveBindInterface(settings)
+  const runtimeConfig = createRuntimeConfig(sourceConfig, selectedNodes, controller, secret, portMap, bindInterface)
   await Plugins.WriteFile(configPath, JSON.stringify(runtimeConfig, null, 2))
   const isAlpha = Plugins.useAppSettingsStore().app?.kernel?.branch === 'alpha'
   const core = await Plugins.getKernelFileName(isAlpha)
@@ -504,13 +513,13 @@ const startRuntime = async (sourceConfig, selectedNodes) => {
   return runtime
 }
 
-const createRuntimeConfig = (sourceConfig, selectedNodes, controller, secret, portMap) => {
+const createRuntimeConfig = (sourceConfig, selectedNodes, controller, secret, portMap, bindInterface) => {
   const rules = selectedNodes.map((node) => ({
     inbound: `test-http-${safeTag(node.tag)}`,
     action: 'route',
     outbound: node.tag
   }))
-  const outbounds = collectRuntimeOutbounds(sourceConfig, selectedNodes).concat([
+  const outbounds = collectRuntimeOutbounds(sourceConfig, selectedNodes, bindInterface).concat([
     {
       type: 'direct',
       tag: 'direct'
@@ -522,7 +531,7 @@ const createRuntimeConfig = (sourceConfig, selectedNodes, controller, secret, po
   ])
   return {
     ...clone(BASE_CONFIG),
-    dns: clone(BASE_CONFIG.dns),
+    dns: createRuntimeDns(bindInterface),
     inbounds: selectedNodes.map((node) => ({
       type: 'http',
       tag: `test-http-${safeTag(node.tag)}`,
@@ -532,6 +541,7 @@ const createRuntimeConfig = (sourceConfig, selectedNodes, controller, secret, po
     outbounds,
     route: {
       ...clone(BASE_CONFIG.route),
+      default_interface: bindInterface || '',
       rules,
       final: 'direct'
     },
@@ -544,13 +554,24 @@ const createRuntimeConfig = (sourceConfig, selectedNodes, controller, secret, po
   }
 }
 
-const sanitizeOutbound = (outbound) => {
+const createRuntimeDns = (bindInterface) => {
+  const dns = clone(BASE_CONFIG.dns)
+  if (!bindInterface) return dns
+  for (const server of dns.servers) {
+    if (server.type === 'hosts' || server.type === 'fakeip') continue
+    server.bind_interface = bindInterface
+  }
+  return dns
+}
+
+const sanitizeOutbound = (outbound, bindInterface) => {
   const cloned = clone(outbound)
   cloned.domain_resolver = 'tcp-speed-dns'
+  if (bindInterface) cloned.bind_interface = bindInterface
   return cloned
 }
 
-const collectRuntimeOutbounds = (sourceConfig, selectedNodes) => {
+const collectRuntimeOutbounds = (sourceConfig, selectedNodes, bindInterface) => {
   const sourceMap = new Map((sourceConfig?.outbounds || []).filter((outbound) => outbound?.tag).map((outbound) => [outbound.tag, outbound]))
   const collected = []
   const seen = new Set()
@@ -559,7 +580,7 @@ const collectRuntimeOutbounds = (sourceConfig, selectedNodes) => {
     const outbound = sourceMap.get(tag)
     if (!outbound) return
     seen.add(tag)
-    collected.push(sanitizeOutbound(outbound))
+    collected.push(sanitizeOutbound(outbound, bindInterface))
     if (outbound.detour) visit(outbound.detour)
   }
   for (const node of selectedNodes) visit(node.tag)
@@ -702,6 +723,18 @@ const getAvailablePorts = async (count) => {
     if (!occupiedPorts.has(port) && !ports.includes(port)) ports.push(port)
   }
   return ports
+}
+
+const resolveBindInterface = async (settings) => {
+  if (!settings?.bypassTun) return ''
+  if (settings.bindInterface) return settings.bindInterface
+  return getDefaultInterface()
+}
+
+const getDefaultInterface = async () => {
+  const routeOutput = await Plugins.Exec('route', ['-n', 'get', 'default']).catch(() => '')
+  const matched = String(routeOutput).match(/interface:\s*([^\s]+)/)
+  return matched?.[1] || ''
 }
 
 const safeTag = (tag) => {
