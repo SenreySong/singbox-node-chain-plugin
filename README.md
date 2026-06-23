@@ -41,6 +41,7 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 - 出站 DNS 解析器
 - 策略组自动整理
 - 测试版核心配置迁移
+- TCP 延迟与测速
 
 ## 测试版核心配置迁移
 
@@ -79,12 +80,23 @@ https://raw.githubusercontent.com/SenreySong/singbox-node-chain-plugin/main/plug
 - 功能注入项在插件面板里单独展示，并可独立开关。
 - 核心运行中可在面板查看 `data/sing-box/config.json` 的完整运行时配置，用于确认插件转换后的实际效果。
 
+## TCP 延迟与测速
+
+手动打开插件后可选择一个或多个节点，也可选择一个或多个策略组。策略组会展开为组内节点并去重。
+
+- TCP 延迟测试默认使用 `https://cp.cloudflare.com/generate_204`。
+- 下载测速默认使用 `https://speed.cloudflare.com/__down?bytes=25000000`，可自定义测速地址和下载字节数。
+- 测试时会启动独立临时 sing-box 核心，每个节点绑定独立本地 HTTP 入站端口，避免并发测速互相串线。
+- 测试结果保存到插件历史中，便于多次对比。
+
 ## 配置持久化
 
 插件配置保存到：
 
 ```text
 data/third/single-node-relay/rules.json
+data/third/tcp-speed-tester/settings.json
+data/third/tcp-speed-tester/history.json
 ```
 
 该文件只记录节点与中转节点的映射，不写入订阅文件，也不修改 GUI profile。核心启动前插件会根据当前生成配置把映射转换成 sing-box 出站的 `detour` 字段。
